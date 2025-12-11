@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Канбан Доска</title>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         * {
             margin: 0;
@@ -364,34 +365,152 @@
     </div>
 
     <script>
+        // ============================================
+        // НАСТРОЙКИ SUPABASE
+        // ============================================
+        // Замените на ваши данные из Supabase Dashboard:
+        // 1. Перейдите на https://supabase.com
+        // 2. Project Settings -> API
+        // 3. Скопируйте URL и anon/public ключ
+        
+        const SUPABASE_URL = 'https://sxvnhldpukrsfgulaljh.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_0C4In_eptNpR2DI2N0ytMQ_XVMeRm_Q';
+        
+        // Инициализация Supabase клиента
+        let supabase = null;
+        let useSupabase = false;
+        
+        // Проверяем, настроен ли Supabase
+        if (SUPABASE_URL !== 'YOUR_SUPABASE_URL' && SUPABASE_KEY !== 'YOUR_SUPABASE_ANON_KEY') {
+            supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            useSupabase = true;
+            console.log('✅ Supabase подключен');
+        } else {
+            console.log('⚠️ Supabase не настроен, используется localStorage');
+        }
+        
         let draggedElement = null;
 
-        // Load tasks from localStorage on page load
-        function loadTasks() {
+        // ============================================
+        // РАБОТА С БАЗОЙ ДАННЫХ
+        // ============================================
+        
+        // Загрузка задач
+        async function loadTasks() {
+            if (useSupabase) {
+                try {
+                    const { data, error } = await supabase
+                        .from('tasks')
+                        .select('*')
+                        .order('created_at', { ascending: true });
+                    
+                    if (error) throw error;
+                    
+                    if (data) {
+                        data.forEach(task => {
+                            createTaskElement(task.text, task.column, task.id);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Ошибка загрузки из Supabase:', error);
+                    loadTasksFromLocalStorage();
+                }
+            } else {
+                loadTasksFromLocalStorage();
+            }
+        }
+        
+        function loadTasksFromLocalStorage() {
             const saved = localStorage.getItem('kanbanTasks');
             if (saved) {
                 const tasks = JSON.parse(saved);
                 tasks.forEach(task => {
-                    createTaskElement(task.text, task.column);
+                    createTaskElement(task.text, task.column, task.id || Date.now());
                 });
             }
         }
-
-        // Save all tasks to localStorage
-        function saveTasks() {
+        
+        // Сохранение задачи
+        async function saveTask(text, column) {
+            if (useSupabase) {
+                try {
+                    const { data, error } = await supabase
+                        .from('tasks')
+                        .insert([{ text, column }])
+                        .select()
+                        .single();
+                    
+                    if (error) throw error;
+                    return data.id;
+                } catch (error) {
+                    console.error('Ошибка сохранения в Supabase:', error);
+                    saveTasksToLocalStorage();
+                    return Date.now();
+                }
+            } else {
+                saveTasksToLocalStorage();
+                return Date.now();
+            }
+        }
+        
+        // Обновление позиции задачи
+        async function updateTaskColumn(taskId, newColumn) {
+            if (useSupabase) {
+                try {
+                    const { error } = await supabase
+                        .from('tasks')
+                        .update({ column: newColumn })
+                        .eq('id', taskId);
+                    
+                    if (error) throw error;
+                } catch (error) {
+                    console.error('Ошибка обновления в Supabase:', error);
+                    saveTasksToLocalStorage();
+                }
+            } else {
+                saveTasksToLocalStorage();
+            }
+        }
+        
+        // Удаление задачи
+        async function deleteTaskFromDB(taskId) {
+            if (useSupabase) {
+                try {
+                    const { error } = await supabase
+                        .from('tasks')
+                        .delete()
+                        .eq('id', taskId);
+                    
+                    if (error) throw error;
+                } catch (error) {
+                    console.error('Ошибка удаления из Supabase:', error);
+                    saveTasksToLocalStorage();
+                }
+            } else {
+                saveTasksToLocalStorage();
+            }
+        }
+        
+        // Сохранение всех задач в localStorage (fallback)
+        function saveTasksToLocalStorage() {
             const tasks = [];
             document.querySelectorAll('.tasks').forEach(column => {
                 const columnId = column.id;
                 column.querySelectorAll('.task').forEach(task => {
                     const text = task.querySelector('.task-text').textContent;
-                    tasks.push({ text, column: columnId });
+                    const id = task.dataset.taskId;
+                    tasks.push({ text, column: columnId, id });
                 });
             });
             localStorage.setItem('kanbanTasks', JSON.stringify(tasks));
         }
 
-        // Create task element
-        function createTaskElement(text, columnId = 'todo') {
+        // ============================================
+        // РАБОТА С ЗАДАЧАМИ
+        // ============================================
+        
+        // Создание элемента задачи
+        function createTaskElement(text, columnId = 'todo', taskId = null) {
             const column = document.getElementById(columnId);
             const emptyState = column.querySelector('.empty-state');
             if (emptyState) {
@@ -401,6 +520,7 @@
             const task = document.createElement('div');
             task.className = 'task';
             task.draggable = true;
+            task.dataset.taskId = taskId;
             task.innerHTML = `
                 <button class="task-delete" onclick="deleteTask(this)">×</button>
                 <div class="task-text">${text}</div>
@@ -412,7 +532,8 @@
             column.appendChild(task);
         }
 
-        function addTask() {
+        // Добавление новой задачи
+        async function addTask() {
             const input = document.getElementById('taskInput');
             const text = input.value.trim();
             
@@ -421,24 +542,29 @@
                 return;
             }
 
-            createTaskElement(text, 'todo');
-            saveTasks();
+            const taskId = await saveTask(text, 'todo');
+            createTaskElement(text, 'todo', taskId);
             
             input.value = '';
             input.focus();
         }
 
-        function deleteTask(button) {
+        // Удаление задачи
+        async function deleteTask(button) {
             const task = button.parentElement;
-            const column = task.parentElement;
+            const taskId = task.dataset.taskId;
             
             task.style.animation = 'taskDisappear 0.3s ease-out forwards';
-            setTimeout(() => {
+            setTimeout(async () => {
                 task.remove();
                 checkEmptyColumns();
-                saveTasks();
+                await deleteTaskFromDB(taskId);
             }, 300);
         }
+
+        // ============================================
+        // DRAG & DROP
+        // ============================================
 
         function handleDragStart(e) {
             draggedElement = this;
@@ -471,7 +597,7 @@
             }
         }
 
-        function handleDrop(e) {
+        async function handleDrop(e) {
             if (e.stopPropagation) {
                 e.stopPropagation();
             }
@@ -480,7 +606,13 @@
                 // Add moving animation
                 draggedElement.classList.add('moving');
                 
+                const taskId = draggedElement.dataset.taskId;
+                const newColumn = this.id;
+                
                 this.appendChild(draggedElement);
+                
+                // Update database
+                await updateTaskColumn(taskId, newColumn);
                 
                 // Remove animation class after it completes
                 setTimeout(() => {
@@ -495,9 +627,6 @@
 
                 // Check if source column is now empty
                 checkEmptyColumns();
-                
-                // Save to localStorage
-                saveTasks();
             }
 
             return false;
@@ -516,6 +645,10 @@
                 }
             });
         }
+
+        // ============================================
+        // ИНИЦИАЛИЗАЦИЯ
+        // ============================================
 
         // Initialize drag and drop
         document.querySelectorAll('.tasks').forEach(zone => {
