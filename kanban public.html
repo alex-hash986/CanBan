@@ -643,7 +643,7 @@
 
         // Удаление задачи
         async function deleteTask(button) {
-            const task = button.parentElement;
+            const task = button.closest('.task');
             const taskId = task.dataset.taskId;
             
             task.style.animation = 'taskDisappear 0.3s ease-out forwards';
